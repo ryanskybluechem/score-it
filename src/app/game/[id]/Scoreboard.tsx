@@ -9,6 +9,9 @@ import {
   initialState,
   undo as undoState,
 } from "@/lib/scoring";
+import { scorePhrase, speak, stopSpeaking } from "@/lib/speech";
+
+const ANNOUNCE_KEY = "scoreit:announce";
 
 type Stored = {
   formatId: string;
@@ -23,14 +26,29 @@ const storageKey = (id: string) => `scoreit:game:${id}`;
 export default function Scoreboard({ gameId }: { gameId: string }) {
   const [data, setData] = useState<Stored | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [announce, setAnnounce] = useState(false);
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storageKey(gameId));
       if (raw) setData(JSON.parse(raw));
+      setAnnounce(localStorage.getItem(ANNOUNCE_KEY) === "1");
     } catch {}
     setLoaded(true);
+    return () => stopSpeaking();
   }, [gameId]);
+
+  const toggleAnnounce = useCallback(() => {
+    setAnnounce((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(ANNOUNCE_KEY, next ? "1" : "0");
+      } catch {}
+      if (next) speak("Announcements on");
+      else stopSpeaking();
+      return next;
+    });
+  }, []);
 
   const format = useMemo(
     () => (data ? getFormat(data.formatId) : undefined),
@@ -52,8 +70,17 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
       if (!data || !format) return;
       const nextState = awardPoint(data.state, team, format);
       persist({ ...data, state: nextState });
+      if (announce) {
+        if (nextState.winner) {
+          const winnerName =
+            nextState.winner === 1 ? data.team1Name : data.team2Name;
+          speak(`Game. ${winnerName} wins.`);
+        } else {
+          speak(scorePhrase(nextState, format));
+        }
+      }
     },
-    [data, format, persist]
+    [data, format, persist, announce]
   );
 
   const onUndo = useCallback(() => {
@@ -100,14 +127,30 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="flex items-center justify-between px-5 py-4 sm:px-8">
+      <header className="flex items-center justify-between gap-3 px-5 py-4 sm:px-8">
         <Link href="/" className="flex items-center gap-2 text-sm text-muted">
           <span aria-hidden>←</span> Home
         </Link>
-        <div className="text-right">
-          <div className="text-sm font-semibold">{format.name}</div>
-          <div className="text-xs text-muted">
-            First to {format.pointsToWin}, win by {format.winBy}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={toggleAnnounce}
+            aria-pressed={announce}
+            aria-label={announce ? "Mute announcements" : "Announce scores"}
+            className={`flex h-10 items-center gap-1.5 rounded-full border px-3 text-sm font-semibold transition ${
+              announce
+                ? "border-accent bg-accent/15 text-accent"
+                : "border-white/10 bg-surface text-muted"
+            }`}
+          >
+            <span aria-hidden>{announce ? "🔊" : "🔇"}</span>
+            <span>{announce ? "Announce" : "Muted"}</span>
+          </button>
+          <div className="text-right">
+            <div className="text-sm font-semibold">{format.name}</div>
+            <div className="text-xs text-muted">
+              First to {format.pointsToWin}, win by {format.winBy}
+            </div>
           </div>
         </div>
       </header>

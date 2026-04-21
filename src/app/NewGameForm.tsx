@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { GameFormat } from "@/lib/gameTypes";
+import type { GameFormat, Sport } from "@/lib/gameTypes";
+import { initialState } from "@/lib/scoring";
 
 function makeId() {
   const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -13,32 +14,51 @@ function makeId() {
   return id;
 }
 
+const SPORT_LABEL: Record<Sport, string> = {
+  pickleball: "Pickleball",
+  tennis: "Tennis",
+};
+
 export default function NewGameForm({ formats }: { formats: GameFormat[] }) {
-  const [formatId, setFormatId] = useState(formats[0].id);
+  const sports = useMemo(() => {
+    const seen = new Set<Sport>();
+    const ordered: Sport[] = [];
+    for (const f of formats) {
+      if (!seen.has(f.sport)) {
+        seen.add(f.sport);
+        ordered.push(f.sport);
+      }
+    }
+    return ordered;
+  }, [formats]);
+
+  const [sport, setSport] = useState<Sport>(sports[0]);
+  const visibleFormats = useMemo(
+    () => formats.filter((f) => f.sport === sport),
+    [formats, sport]
+  );
+
+  const [formatId, setFormatId] = useState(visibleFormats[0].id);
   const [team1, setTeam1] = useState("");
   const [team2, setTeam2] = useState("");
   const router = useRouter();
 
-  const format = useMemo(
-    () => formats.find((f) => f.id === formatId) ?? formats[0],
-    [formats, formatId]
-  );
+  const activeFormatId = visibleFormats.some((f) => f.id === formatId)
+    ? formatId
+    : visibleFormats[0].id;
+  const format = visibleFormats.find((f) => f.id === activeFormatId)!;
+
+  const singles = format.sport === "pickleball" ? format.teamSize === 1 : true;
+  const isTennis = format.sport === "tennis";
+  const personLabel = isTennis ? "Player" : singles ? "Player" : "Team";
 
   function start() {
     const id = makeId();
     const payload = {
       formatId: format.id,
-      team1Name: team1.trim() || (format.teamSize === 1 ? "Player 1" : "Team 1"),
-      team2Name: team2.trim() || (format.teamSize === 1 ? "Player 2" : "Team 2"),
-      state: {
-        team1Score: 0,
-        team2Score: 0,
-        servingTeam: 1,
-        serverNumber: 1,
-        firstServiceOfGame: true,
-        winner: null,
-        history: [],
-      },
+      team1Name: team1.trim() || `${personLabel} 1`,
+      team2Name: team2.trim() || `${personLabel} 2`,
+      state: initialState(format),
       createdAt: Date.now(),
     };
     try {
@@ -47,17 +67,44 @@ export default function NewGameForm({ formats }: { formats: GameFormat[] }) {
     router.push(`/game/${id}`);
   }
 
-  const singles = format.teamSize === 1;
-
   return (
     <div className="flex flex-col gap-8">
+      <section>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
+          Sport
+        </h2>
+        <div className="flex gap-2">
+          {sports.map((s) => {
+            const active = s === sport;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => {
+                  setSport(s);
+                  const first = formats.find((f) => f.sport === s);
+                  if (first) setFormatId(first.id);
+                }}
+                className={`rounded-full border px-5 py-2 text-sm font-semibold transition ${
+                  active
+                    ? "border-accent bg-accent text-background"
+                    : "border-white/10 bg-surface text-foreground hover:bg-surface-2"
+                }`}
+              >
+                {SPORT_LABEL[s]}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
           Pick a format
         </h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {formats.map((f) => {
-            const selected = f.id === formatId;
+          {visibleFormats.map((f) => {
+            const selected = f.id === activeFormatId;
             return (
               <button
                 key={f.id}
@@ -82,19 +129,19 @@ export default function NewGameForm({ formats }: { formats: GameFormat[] }) {
 
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
-          {singles ? "Players" : "Teams"}
+          {isTennis || singles ? "Players" : "Teams"}
         </h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <input
             value={team1}
             onChange={(e) => setTeam1(e.target.value)}
-            placeholder={singles ? "Player 1 (optional)" : "Team 1 (optional)"}
+            placeholder={`${personLabel} 1 (optional)`}
             className="h-12 rounded-xl border border-white/10 bg-surface px-4 text-base outline-none focus:border-accent"
           />
           <input
             value={team2}
             onChange={(e) => setTeam2(e.target.value)}
-            placeholder={singles ? "Player 2 (optional)" : "Team 2 (optional)"}
+            placeholder={`${personLabel} 2 (optional)`}
             className="h-12 rounded-xl border border-white/10 bg-surface px-4 text-base outline-none focus:border-accent"
           />
         </div>

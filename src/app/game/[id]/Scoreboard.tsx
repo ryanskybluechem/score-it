@@ -7,11 +7,12 @@ import {
   awardPoint,
   type GameState,
   initialState,
+  type TennisState,
   undo as undoState,
 } from "@/lib/scoring";
 import { scorePhrase, speak, stopSpeaking } from "@/lib/speech";
-
-const ANNOUNCE_KEY = "scoreit:announce";
+import PickleballCourt from "./PickleballCourt";
+import TennisCourt from "./TennisCourt";
 
 type Stored = {
   formatId: string;
@@ -22,6 +23,7 @@ type Stored = {
 };
 
 const storageKey = (id: string) => `scoreit:game:${id}`;
+const ANNOUNCE_KEY = "scoreit:announce";
 
 export default function Scoreboard({ gameId }: { gameId: string }) {
   const [data, setData] = useState<Stored | null>(null);
@@ -38,6 +40,11 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
     return () => stopSpeaking();
   }, [gameId]);
 
+  const format = useMemo(
+    () => (data ? getFormat(data.formatId) : undefined),
+    [data]
+  );
+
   const toggleAnnounce = useCallback(() => {
     setAnnounce((prev) => {
       const next = !prev;
@@ -49,11 +56,6 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
       return next;
     });
   }, []);
-
-  const format = useMemo(
-    () => (data ? getFormat(data.formatId) : undefined),
-    [data]
-  );
 
   const persist = useCallback(
     (next: Stored) => {
@@ -74,7 +76,8 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
         if (nextState.winner) {
           const winnerName =
             nextState.winner === 1 ? data.team1Name : data.team2Name;
-          speak(`Game. ${winnerName} wins.`);
+          const verb = format.sport === "tennis" ? "Game, set, and match." : "Game.";
+          speak(`${verb} ${winnerName} wins.`);
         } else {
           speak(scorePhrase(nextState, format));
         }
@@ -89,9 +92,9 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
   }, [data, persist]);
 
   const onReset = useCallback(() => {
-    if (!data) return;
-    persist({ ...data, state: initialState() });
-  }, [data, persist]);
+    if (!data || !format) return;
+    persist({ ...data, state: initialState(format) });
+  }, [data, format, persist]);
 
   if (!loaded) {
     return (
@@ -120,10 +123,23 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
   }
 
   const { state, team1Name, team2Name } = data;
-  const serving1 = state.servingTeam === 1;
-  const serving2 = state.servingTeam === 2;
-  const doubles = format.teamSize === 2;
-  const isSideout = format.scoringType === "sideout";
+
+  // Guard against stored states that don't match the current format (shouldn't
+  // normally happen, but keeps types safe).
+  const mismatch =
+    (format.sport === "pickleball" && state.kind !== "pickleball") ||
+    (format.sport === "tennis" && state.kind !== "tennis");
+
+  const formatMeta =
+    format.sport === "pickleball"
+      ? `First to ${format.pointsToWin}, win by ${format.winBy}`
+      : format.scoring === "tiebreak-only"
+      ? `First to ${format.tiebreakPoints}, win by 2`
+      : `Best of ${format.bestOfSets} set${format.bestOfSets === 1 ? "" : "s"}`;
+
+  const winnerSummary = state.winner
+    ? summariseWinner(state, format, team1Name, team2Name)
+    : null;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -148,46 +164,41 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
           </button>
           <div className="text-right">
             <div className="text-sm font-semibold">{format.name}</div>
-            <div className="text-xs text-muted">
-              First to {format.pointsToWin}, win by {format.winBy}
-            </div>
+            <div className="text-xs text-muted">{formatMeta}</div>
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 flex-col gap-3 px-3 pb-4 sm:flex-row sm:gap-4 sm:px-6">
-        <TeamPanel
-          name={team1Name}
-          score={state.team1Score}
-          serving={serving1}
-          serverNumber={doubles && isSideout && serving1 ? state.serverNumber : undefined}
-          winner={state.winner === 1}
-          disabled={state.winner !== null}
-          onTap={() => onScore(1)}
-          color="lime"
-        />
-        <TeamPanel
-          name={team2Name}
-          score={state.team2Score}
-          serving={serving2}
-          serverNumber={doubles && isSideout && serving2 ? state.serverNumber : undefined}
-          winner={state.winner === 2}
-          disabled={state.winner !== null}
-          onTap={() => onScore(2)}
-          color="cyan"
-        />
+      <div className="flex flex-1 flex-col px-3 pb-4 sm:px-6">
+        {mismatch ? (
+          <div className="flex flex-1 items-center justify-center text-muted">
+            Stored game doesn&apos;t match this format. Reset to start over.
+          </div>
+        ) : format.sport === "pickleball" && state.kind === "pickleball" ? (
+          <PickleballCourt
+            state={state}
+            format={format}
+            team1Name={team1Name}
+            team2Name={team2Name}
+            onScore={onScore}
+          />
+        ) : format.sport === "tennis" && state.kind === "tennis" ? (
+          <TennisCourt
+            state={state}
+            format={format}
+            team1Name={team1Name}
+            team2Name={team2Name}
+            onScore={onScore}
+          />
+        ) : null}
       </div>
 
-      {state.winner && (
+      {winnerSummary && (
         <div className="mx-3 mb-3 rounded-2xl bg-accent/15 px-5 py-4 text-center sm:mx-6">
           <div className="text-sm uppercase tracking-wider text-accent">
-            Game
+            {format.sport === "tennis" ? "Game, set, match" : "Game"}
           </div>
-          <div className="mt-1 text-xl font-bold">
-            {state.winner === 1 ? team1Name : team2Name} wins{" "}
-            {Math.max(state.team1Score, state.team2Score)}–
-            {Math.min(state.team1Score, state.team2Score)}
-          </div>
+          <div className="mt-1 text-xl font-bold">{winnerSummary}</div>
         </div>
       )}
 
@@ -218,49 +229,29 @@ export default function Scoreboard({ gameId }: { gameId: string }) {
   );
 }
 
-function TeamPanel({
-  name,
-  score,
-  serving,
-  serverNumber,
-  winner,
-  disabled,
-  onTap,
-  color,
-}: {
-  name: string;
-  score: number;
-  serving: boolean;
-  serverNumber?: 1 | 2;
-  winner: boolean;
-  disabled: boolean;
-  onTap: () => void;
-  color: "lime" | "cyan";
-}) {
-  const ringColor = color === "lime" ? "ring-accent" : "ring-cyan-400";
-  const accentText = color === "lime" ? "text-accent" : "text-cyan-400";
-  return (
-    <button
-      type="button"
-      onClick={onTap}
-      disabled={disabled}
-      className={`relative flex flex-1 flex-col items-center justify-center rounded-3xl bg-surface p-6 transition active:scale-[0.99] disabled:opacity-70 ${
-        winner ? `ring-2 ${ringColor}` : ""
-      }`}
-    >
-      <div className="flex items-center gap-2 text-lg font-semibold">
-        {serving && <span className={`text-xs uppercase tracking-wider ${accentText}`}>Serving</span>}
-        <span>{name}</span>
-      </div>
-      <div className="mt-4 text-[clamp(6rem,22vw,12rem)] font-bold leading-none tabular-nums">
-        {score}
-      </div>
-      {serverNumber !== undefined && (
-        <div className="mt-2 text-sm text-muted">Server {serverNumber}</div>
-      )}
-      {!disabled && (
-        <div className="absolute bottom-4 text-xs text-muted">Tap to score</div>
-      )}
-    </button>
-  );
+function summariseWinner(
+  state: GameState,
+  format: ReturnType<typeof getFormat> & object,
+  team1Name: string,
+  team2Name: string
+): string {
+  if (!state.winner) return "";
+  const winnerName = state.winner === 1 ? team1Name : team2Name;
+
+  if (state.kind === "pickleball") {
+    const hi = Math.max(state.team1Score, state.team2Score);
+    const lo = Math.min(state.team1Score, state.team2Score);
+    return `${winnerName} wins ${hi}–${lo}`;
+  }
+
+  const ts = state as TennisState;
+  if (format && "scoring" in format && format.scoring === "tiebreak-only") {
+    const hi = Math.max(ts.tiebreakT1, ts.tiebreakT2);
+    const lo = Math.min(ts.tiebreakT1, ts.tiebreakT2);
+    return `${winnerName} wins ${hi}–${lo}`;
+  }
+  const setStr = ts.sets
+    .map((s) => (state.winner === 1 ? `${s.t1}–${s.t2}` : `${s.t2}–${s.t1}`))
+    .join(", ");
+  return `${winnerName} wins ${setStr}`;
 }
